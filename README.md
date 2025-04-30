@@ -1,3 +1,7 @@
+## 🐮 NetCowTool
+
+NetCowTool is a modular reconnaissance and network analysis toolkit designed to assist with local discovery, VLAN analysis, Wi-Fi probing, and active scanning.
+
 ## Example Usage 
 ```bash
 sudo python3 netcowtool.py
@@ -55,7 +59,7 @@ or:
 chmod +x ./setup.sh
 sudo ./setup.sh
 ```
-## Running the Programs
+## Running Programs
 
 After installation, you can run `sudo python3 netcowtool.py` or the programs as follows:
 
@@ -70,7 +74,7 @@ sudo ./scanner
 Create a Python launcher with simple and multiple choice options to select the desired program to run.
 
 **Specific Discovery Programs:**
-Develop specific discovery programs to search for switches, IP phones, Windows, Linux, etc.
+Develop specific discovery programs to search for switches, IP phones, Windows, Linux.
 
 **Better Host Ranking in Scanner:**
 Implement more sophisticated algorithms for host evaluation and ranking to enhance the accuracy and usefulness of the scanner program.
