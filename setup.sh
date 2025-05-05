@@ -7,8 +7,17 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo -e "${YELLOW}Importing Kali GPG archive key...${NC}"
-sudo curl -fsSL https://archive.kali.org/archive-key.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/kali-archive.gpg > /dev/null
+# Détection de la distribution
+DISTRO=$(lsb_release -is 2>/dev/null || grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+DISTRO_LIKE=$(grep '^ID_LIKE=' /etc/os-release | cut -d= -f2 | tr -d '"')
+
+echo -e "${YELLOW}Detected distribution: ${DISTRO}${NC}"
+
+# Cas spécifique pour Kali : ajout de la clé GPG si nécessaire
+if [[ "$DISTRO" == "Kali" || "$DISTRO" == "kali" ]]; then
+    echo -e "${YELLOW}Importing Kali GPG archive key...${NC}"
+    sudo curl -fsSL https://archive.kali.org/archive-key.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/kali-archive.gpg > /dev/null
+fi
 
 echo -e "${YELLOW}Updating package lists...${NC}"
 sudo apt-get clean
@@ -27,7 +36,7 @@ fi
 echo -e "${YELLOW}Installing libsystemd-dev (latest available)...${NC}"
 if ! dpkg -s libsystemd-dev &> /dev/null; then
     VERSION=$(apt-cache policy libsystemd-dev | grep Candidate | awk '{print $2}')
-    sudo apt-get install -y libsystemd-dev=$VERSION
+    sudo apt-get install -y libsystemd-dev=$VERSION || sudo apt-get install -y libsystemd-dev
 else
     echo -e "${GREEN}libsystemd-dev already installed.${NC}"
 fi
@@ -39,13 +48,16 @@ echo -e "${YELLOW}(Re)Installing libpcap-dev...${NC}"
 sudo apt-get install --reinstall -y libpcap-dev
 
 echo -e "${YELLOW}Checking if pcap.h is present...${NC}"
-if [[ ! -f /usr/include/pcap/pcap.h ]]; then
+if [[ ! -f /usr/include/pcap/pcap.h && ! -f /usr/include/pcap.h ]]; then
     echo -e "${RED}pcap.h missing. libpcap-dev may not be properly installed.${NC}"
     exit 1
 fi
 
-sudo systemctl start lldpd
-sudo systemctl enable lldpd
+# Activer lldpd si disponible
+if systemctl list-unit-files | grep -q lldpd.service; then
+    sudo systemctl start lldpd
+    sudo systemctl enable lldpd
+fi
 echo -e "${GREEN}Dependencies for discovery installed.${NC}"
 
 echo -e "${YELLOW}Installing dependencies for ssid...${NC}"
