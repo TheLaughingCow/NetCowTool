@@ -19,6 +19,31 @@
 
 char interface[50];
 
+// Déclaration des fonctions
+void restartNetworkManager(void);
+void get_network_interface_name(char *interface_name);
+void changeMACAddressAndRenewIP(char *interface);
+char* getLocalNetworkAddress(char *jsonFilePath);
+void scanActiveHostsAndUpdateJSON(char *network, char *jsonFilePath, int vlan_id, const char *vlanFilePath);
+void setVLAN(char *interface, int vlan_id);
+void waitForDHCP(char *vlan_interface);
+char* updateNetworkAddressForVLAN(char *vlan_interface, char *jsonFilePath, int vlan_id, int netmask_bits);
+void resetNetworkInterface(char *interface);
+void processVLANs(char *interface, char *jsonFilePath);
+void mergeAndDeleteJSONFiles(const char *filePath1, const char *filePath2, const char *mergedFilePath);
+void appendToBuffer(char **buffer, const char *data, size_t *bufferSize);
+void scanAllHostsAndSaveToXML(struct json_object *activeHosts);
+void readXMLAndSaveToJson(const char *xmlFilePath, const char *jsonFilePath);
+int MyStrcasestr(const char *haystack, const char *needle);
+void readIPsFromJSON(const char *jsonFilePath, char **ipList, int *ipCount);
+int getTTL(const char *ip);
+void categorizeHost(const char *os_name, const char *vendor, json_object *host_json, int *hasFirewalls, int *hasServers, int *hasSwitchWifi, int *hasTelephonie, int *hasPoste, int *hasImprimantes, int *hasOthers, char *firewalls, char *servers, char *switchWifi, char *telephonie, char *poste, char *imprimantes, char *others, const char *hostDetails);
+void createHtml(json_object *jsonRoot, const char *htmlFilePath, int isVLAN, int vlan_id);
+void scanAndClassifyVLANHosts(struct json_object *parsed_json, const char *htmlFilePath);
+void signalHandler(int signum);
+void cleanup(void);
+char* str_replace(char *str, const char *old, const char *new);
+
 void get_network_interface_name(char *interface_name) {
     FILE *fp = fopen("/proc/net/route", "r");
     if (fp == NULL) {
@@ -299,15 +324,32 @@ void resetNetworkInterface(char *interface) {
     sprintf(command, "macchanger -p %s > /dev/null", interface);
     system(command);
 
+    // Arrêter l'interface
     sprintf(command, "ip link set %s down", interface);
     system(command);
+    
+    // Attendre un peu
+    sleep(1);
+    
+    // Supprimer l'adresse IP existante
+    sprintf(command, "ip addr flush dev %s", interface);
+    system(command);
+    
+    // Réactiver l'interface
     sprintf(command, "ip link set %s up", interface);
     system(command);
+    
+    // Attendre un peu
+    sleep(1);
 
+    // Obtenir une nouvelle adresse IP via DHCP
+    sprintf(command, "dhclient -r %s", interface);
+    system(command);
+    sleep(1);
     sprintf(command, "dhclient %s", interface);
     system(command);
 
-    system("systemctl restart NetworkManager");
+    restartNetworkManager();
 
     printf("Interface %s réinitialisée\n", interface);
 }
@@ -839,7 +881,7 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath, int isVLAN, int
         fprintf(file, "});\n");
         fprintf(file, "</script>\n");
         fprintf(file, "<div class='container'>\n");
-        fprintf(file, "<h1>Network Scanner - <span class='max-black'>Entreprise</span><span class='heart-red'>X</span></h1>\n");
+        fprintf(file, "<h1>Network Scanner - <span class='max-black'>Enterprise</span><span class='heart-red'>X</span></h1>\n");
         isFirstCall = 0;
     } else {
         file = fopen(htmlFilePath, "a");
@@ -918,9 +960,14 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath, int isVLAN, int
         length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='host'>\n");
         
         if (webPort != -1) {
-            length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='accordion'>IP Address: <a href='http://%s:%d' target='_blank'>%s</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%s</div>", ip_addr, webPort, ip_addr, vendor);
+            const char *protocol = (webPort == 443 || webPort == 8443) ? "https" : "http";
+            length += snprintf(hostDetails + length, sizeof(hostDetails) - length, 
+                "<div class='accordion'>IP Address: <a href='%s://%s:%d' target='_blank'>%s</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%s</div>", 
+                protocol, ip_addr, webPort, ip_addr, vendor);
         } else {
-            length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='accordion'>IP Address: %s&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%s</div>\n", ip_addr, vendor);
+            length += snprintf(hostDetails + length, sizeof(hostDetails) - length, 
+                "<div class='accordion'>IP Address: %s&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%s</div>\n", 
+                ip_addr, vendor);
         }
         
         length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='panel'>\n");
@@ -1110,16 +1157,40 @@ void scanAndClassifyVLANHosts(struct json_object *parsed_json, const char *htmlF
     }
 }
 
+void restartNetworkManager() {
+    printf(YELLOW "Redémarrage de NetworkManager...\n" COLOR_RESET);
+    system("sudo systemctl stop NetworkManager");
+    sleep(2);
+    system("sudo systemctl start NetworkManager");
+    sleep(2);
+}
+
 void signalHandler(int signum) {
     printf(RED"Interruption détectée." COLOR_RESET "Réinitialisation du réseau...\n");
     resetNetworkInterface(interface);
-        printf(RED "Fin du programme\n" COLOR_RESET);
+    printf(RED "Fin du programme\n" COLOR_RESET);
     exit(signum);
 }
 
 void cleanup() {
     resetNetworkInterface(interface);
-        printf(RED "Fin du programme\n" COLOR_RESET);
+    printf(RED "Fin du programme\n" COLOR_RESET);
+}
+
+char* str_replace(char *str, const char *old, const char *new) {
+    static char buffer[1024];
+    char *p;
+    
+    if (!(p = strstr(str, old))) {
+        return str;
+    }
+    
+    strncpy(buffer, str, p - str);
+    buffer[p - str] = '\0';
+    
+    sprintf(buffer + (p - str), "%s%s", new, p + strlen(old));
+    
+    return buffer;
 }
 
 int main() {
