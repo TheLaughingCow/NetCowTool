@@ -199,7 +199,7 @@ void scanActiveHostsAndUpdateJSON(char *network, char *jsonFilePath, int vlan_id
 
     json_object_put(parsed_json);
 
-    printf(GREEN "...Scan terminé...\n" COLOR_RESET);
+    printf(GREEN "...Scan terminé...\n"COLOR_RESET);
 }
 
 void setVLAN(char *interface, int vlan_id) {
@@ -603,8 +603,97 @@ int MyStrcasestr(const char *haystack, const char *needle) {
     return 0;
 }
 
-void categorizeHost(const char *os_name, const char *vendor, json_object *host_json, int *hasFirewalls, int *hasServers, int *hasSwitchWifi, int *hasTelephonie, int *hasPoste, int *hasOthers, char *firewalls, char *servers, char *switchWifi, char *telephonie, char *poste, char *others, const char *hostDetails) {
+void readIPsFromJSON(const char *jsonFilePath, char **ipList, int *ipCount) {
+    struct json_object *parsed_json = json_object_from_file(jsonFilePath);
+    if (!parsed_json) {
+        fprintf(stderr, RED "Erreur: Impossible de lire le fichier JSON\n" COLOR_RESET);
+        return;
+    }
 
+    size_t n_hosts = json_object_array_length(parsed_json);
+    *ipList = malloc(n_hosts * MAX_IP_LENGTH);
+    *ipCount = 0;
+
+    for (size_t i = 0; i < n_hosts; i++) {
+        json_object *host = json_object_array_get_idx(parsed_json, i);
+        json_object *ip_addr_obj;
+        
+        if (json_object_object_get_ex(host, "IP Address", &ip_addr_obj)) {
+            const char *ip = json_object_get_string(ip_addr_obj);
+            strcpy(*ipList + (*ipCount * MAX_IP_LENGTH), ip);
+            (*ipCount)++;
+        }
+    }
+
+    json_object_put(parsed_json);
+}
+
+int getTTL(const char *ip) {
+    char command[256];
+    char output[1024];
+    FILE *fp;
+    int ttl = -1;
+
+    snprintf(command, sizeof(command), "ping -c 1 %s", ip);
+    
+    fp = popen(command, "r");
+    if (fp == NULL) {
+        return -1;
+    }
+
+    while (fgets(output, sizeof(output), fp) != NULL) {
+        if (strstr(output, "ttl=") != NULL) {
+            char *ttl_str = strstr(output, "ttl=");
+            if (ttl_str) {
+                ttl_str += 4;
+                ttl = atoi(ttl_str);
+            }
+            break;
+        }
+    }
+
+    pclose(fp);
+    return ttl;
+}
+
+void categorizeHost(const char *os_name, const char *vendor, json_object *host_json, int *hasFirewalls, int *hasServers, int *hasSwitchWifi, int *hasTelephonie, int *hasPoste, int *hasImprimantes, int *hasOthers, char *firewalls, char *servers, char *switchWifi, char *telephonie, char *poste, char *imprimantes, char *others, const char *hostDetails) {
+    // Vérification du TTL en premier
+    json_object *ip_addr_obj;
+    const char *ip_addr;
+    
+    if (json_object_object_get_ex(host_json, "IP Address", &ip_addr_obj)) {
+        ip_addr = json_object_get_string(ip_addr_obj);
+        int ttl = getTTL(ip_addr);
+        
+        if (ttl == 128) {
+            *hasPoste = 1;
+            strcat(poste, hostDetails);
+            return;
+        }
+    }
+
+    // Vérification des imprimantes
+    if (vendor && (MyStrcasestr(vendor, "Brother") || MyStrcasestr(vendor, "HP") || MyStrcasestr(vendor, "Epson") || MyStrcasestr(vendor, "Canon"))) {
+        json_object *ports_obj;
+        if (json_object_object_get_ex(host_json, "Open Ports", &ports_obj)) {
+            int printer_ports = 0;
+            size_t n_ports = json_object_array_length(ports_obj);
+            for (size_t i = 0; i < n_ports; i++) {
+                json_object *port = json_object_array_get_idx(ports_obj, i);
+                const char *port_str = json_object_get_string(port);
+                if (strstr(port_str, "515") || strstr(port_str, "631") || strstr(port_str, "9100")) {
+                    printer_ports++;
+                }
+            }
+            if (printer_ports >= 2) {
+                *hasImprimantes = 1;
+                strcat(imprimantes, hostDetails);
+                return;
+            }
+        }
+    }
+
+    // Vérification des ports de téléphonie
     json_object *ports_obj;
     if (json_object_object_get_ex(host_json, "Open Ports", &ports_obj)) {
         size_t n_ports = json_object_array_length(ports_obj);
@@ -619,44 +708,33 @@ void categorizeHost(const char *os_name, const char *vendor, json_object *host_j
         }
     }
 
+    // Vérification des firewalls
     if ((os_name && MyStrcasestr(os_name, "firewall")) || (vendor && (MyStrcasestr(vendor, "Fortinet") || MyStrcasestr(vendor, "Sagemcom") || MyStrcasestr(vendor, "Sophos")))) {
         *hasFirewalls = 1;
         strcat(firewalls, hostDetails);
         return;
     }
 
+    // Vérification des serveurs
     if ((vendor && MyStrcasestr(vendor, "VMware")) || (os_name && (MyStrcasestr(os_name, "ilo") || MyStrcasestr(os_name, "idrac")))) {
         *hasServers = 1;
         strcat(servers, hostDetails);
         return;
     }
 
+    // Vérification des switchs et points d'accès
     if ((os_name && MyStrcasestr(os_name, "switch")) || (vendor && (MyStrcasestr(vendor, "Aruba") || MyStrcasestr(vendor, "Unifi") || MyStrcasestr(vendor, "Zyxel") || MyStrcasestr(vendor, "Cisco") || MyStrcasestr(vendor, "Dlink") || MyStrcasestr(vendor, "Tplink") || MyStrcasestr(vendor, "Neatgear")))) {
         *hasSwitchWifi = 1;
         strcat(switchWifi, hostDetails);
         return;
     }
 
-    json_object *hostname_obj;
-    if (json_object_object_get_ex(host_json, "Hostnames", &hostname_obj)) {
-        size_t n_hostnames = json_object_array_length(hostname_obj);
-        for (size_t i = 0; i < n_hostnames; i++) {
-            json_object *hostname = json_object_array_get_idx(hostname_obj, i);
-            const char *hostname_str = json_object_get_string(hostname);
-            if (MyStrcasestr(hostname_str, "esx")) {
-                *hasServers = 1;
-                strcat(servers, hostDetails);
-                return;
-            }
-        }
-    }
-
+    // Vérification des postes Windows par d'autres méthodes
     if ((os_name && MyStrcasestr(os_name, "windows")) || (vendor && (MyStrcasestr(vendor, "HP") || MyStrcasestr(vendor, "Hewlett Packard")))) {
         json_object *os_obj = NULL;
         int isHPandPort135 = 0;
 
         if (vendor && (MyStrcasestr(vendor, "HP") || MyStrcasestr(vendor, "Hewlett Packard"))) {
-            json_object *ports_obj;
             if (json_object_object_get_ex(host_json, "Open Ports", &ports_obj)) {
                 size_t n_ports = json_object_array_length(ports_obj);
                 for (size_t i = 0; i < n_ports; i++) {
@@ -681,6 +759,7 @@ void categorizeHost(const char *os_name, const char *vendor, json_object *host_j
         }
     }
     
+    // Si aucune catégorie n'est trouvée, mettre dans "Autres"
     *hasOthers = 1;
     strcat(others, hostDetails);
 }
@@ -692,19 +771,23 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
     char *switchWifi = calloc(1, INITIAL_BUFFER_SIZE);
     char *poste = calloc(1, INITIAL_BUFFER_SIZE);
     char *telephonie = calloc(1, INITIAL_BUFFER_SIZE);
+    char *imprimantes = calloc(1, INITIAL_BUFFER_SIZE);
     char *others = calloc(1, INITIAL_BUFFER_SIZE);
     
-    if (!firewalls || !servers || !switchWifi || !poste || !telephonie || !others) {
+    if (!firewalls || !servers || !switchWifi || !poste || !telephonie || !imprimantes || !others) {
         if (firewalls) free(firewalls);
         if (servers) free(servers);
         if (switchWifi) free(switchWifi);
         if (poste) free(poste);
         if (telephonie) free(telephonie);
+        if (imprimantes) free(imprimantes);
         if (others) free(others);
 
         fprintf(stderr, RED "Erreur d'allocation de mémoire\n"COLOR_RESET);
         return;
     }
+
+    printf(YELLOW "Amélioration de la classification des Postes en cours...\n" COLOR_RESET);
 
     FILE *file = fopen(htmlFilePath, "w");
     if (file == NULL) {
@@ -714,6 +797,7 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
         free(switchWifi);
         free(poste);
         free(telephonie);
+        free(imprimantes);
         free(others);
         return;
     }
@@ -725,14 +809,14 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
     fprintf(file, "@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');\n");
     fprintf(file, "body { font-family: 'Roboto', sans-serif; margin: 0; padding: 0; background-color: #000; color: #fff; }\n");
     fprintf(file, ".container { width: 65%; margin: 0 auto; padding: 20px; background-color: #333; box-shadow: 0 0 20px rgba(0, 0, 0, 0.5); }\n");
-    fprintf(file, "h1 { text-align: center; color: #4CAF50; }\n");
+    fprintf(file, "h1 { text-align: center; color:rgb(255, 255, 255); }\n");
     fprintf(file, ".heart-red { color: #FF0000; }\n");
-    fprintf(file, ".max-black { color: #000000; }\n");
-    fprintf(file, ".firewall-container, .server-container, .switch-wifi-container, .poste-container, .telephonie-container, .other-container { margin-bottom: 20px; background-color: #222; padding: 10px; border-radius: 8px; }\n");
-    fprintf(file, ".firewall-container h2, .server-container h2, .switch-wifi-container h2, .poste-container h2, .telephonie-container h2, .other-container h2 { background-color: #4CAF50; color: #000; padding: 10px; border-radius: 5px; }\n");
+    fprintf(file, ".max-black { color:rgb(255, 255, 255); }\n");
+    fprintf(file, ".firewall-container, .server-container, .switch-wifi-container, .poste-container, .telephonie-container, .imprimante-container, .other-container { margin-bottom: 20px; background-color: #222; padding: 10px; border-radius: 8px; }\n");
+    fprintf(file, ".firewall-container h2, .server-container h2, .switch-wifi-container h2, .poste-container h2, .telephonie-container h2, .imprimante-container h2, .other-container h2 { background-color:rgb(0, 97, 243); color: #000; padding: 10px; border-radius: 5px; }\n");
     fprintf(file, ".host { border: 1px solid #555; padding: 10px; margin-bottom: 10px; border-radius: 5px; background-color: #222; }\n");
     fprintf(file, ".host p { margin: 5px 0; }\n");
-    fprintf(file, "a { color: #4CAF50; text-decoration: none; }\n");
+    fprintf(file, "a { color:rgb(0, 97, 243); text-decoration: none; }\n");
     fprintf(file, "a:hover { text-decoration: underline; color: #FFF; }\n");
     fprintf(file, "@media print { .container { width: 100%; } }\n");
     fprintf(file, ".accordion { cursor: pointer; width: 100%; border: none; text-align: left; outline: none; font-size: 20px; transition: 0.4s; }\n");
@@ -754,11 +838,12 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
     fprintf(file, "});\n");
     fprintf(file, "</script>\n");
     fprintf(file, "<div class='container'>\n");
-    fprintf(file, "<h1>Scan Réseau by <span class='max-black'>MAX</span> made with <span class='heart-red'>♥</span></h1>\n");
+    fprintf(file, "<h1>Network Scanner - <span class='max-black'>Entreprise</span><span class='heart-red'>X</span></h1>\n");
 
-    int hasFirewalls = 0, hasServers = 0, hasSwitchWifi = 0, hasPoste = 0, hasTelephonie = 0, hasOthers = 0; 
+    int hasFirewalls = 0, hasServers = 0, hasSwitchWifi = 0, hasPoste = 0, hasTelephonie = 0, hasImprimantes = 0, hasOthers = 0; 
 
     size_t n_hosts = json_object_array_length(jsonRoot);
+
     for (size_t i = 0; i < n_hosts; i++) {
         json_object *host = json_object_array_get_idx(jsonRoot, i);
 
@@ -813,7 +898,6 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
             length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='accordion'>IP Address: <a href='http://%s:%d' target='_blank'>%s</a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%s</div>", ip_addr, webPort, ip_addr, vendor);
         } else {
             length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='accordion'>IP Address: %s&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;%s</div>\n", ip_addr, vendor);
-
         }
         
         length += snprintf(hostDetails + length, sizeof(hostDetails) - length, "<div class='panel'>\n");
@@ -855,8 +939,7 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
 
         strcat(hostDetails, "</div>\n</div>\n");
 
-        categorizeHost(os_name, vendor, host, &hasFirewalls, &hasServers, &hasSwitchWifi, &hasTelephonie, &hasPoste, &hasOthers, firewalls, servers, switchWifi, telephonie, poste, others, hostDetails);
-
+        categorizeHost(os_name, vendor, host, &hasFirewalls, &hasServers, &hasSwitchWifi, &hasTelephonie, &hasPoste, &hasImprimantes, &hasOthers, firewalls, servers, switchWifi, telephonie, poste, imprimantes, others, hostDetails);
     }
 
     if (hasFirewalls) {
@@ -871,12 +954,14 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
     if (hasPoste) {
         fprintf(file, "<div class='poste-container'><h2>Postes</h2>\n%s</div>\n", poste);
     }
-    
     if (hasTelephonie) {
         fprintf(file, "<div class='telephonie-container'><h2>Téléphonie</h2>\n%s</div>\n", telephonie);
     }
+    if (hasImprimantes) {
+        fprintf(file, "<div class='imprimante-container'><h2>Imprimantes</h2>\n%s</div>\n", imprimantes);
+    }
     if (hasOthers) {
-        fprintf(file, "<div class='other-container'><h2>Autre</h2>\n%s</div>\n", others);
+        fprintf(file, "<div class='other-container'><h2>Autres</h2>\n%s</div>\n", others);
     }
 
     fprintf(file, "</div>\n</body>\n</html>"); 
@@ -887,6 +972,7 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
     free(switchWifi);
     free(poste);
     free(telephonie);
+    free(imprimantes);
     free(others);
 
     printf(RED "Rapport HTML généré. %s\n" COLOR_RESET, htmlFilePath);
