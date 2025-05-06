@@ -765,7 +765,9 @@ void categorizeHost(const char *os_name, const char *vendor, json_object *host_j
 }
 
 
-void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
+void createHtml(json_object *jsonRoot, const char *htmlFilePath, int isVLAN, int vlan_id) {
+    static FILE *file = NULL;
+    static int isFirstCall = 1;
     char *firewalls = calloc(1, INITIAL_BUFFER_SIZE);
     char *servers = calloc(1, INITIAL_BUFFER_SIZE);
     char *switchWifi = calloc(1, INITIAL_BUFFER_SIZE);
@@ -782,63 +784,84 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
         if (telephonie) free(telephonie);
         if (imprimantes) free(imprimantes);
         if (others) free(others);
-
         fprintf(stderr, RED "Erreur d'allocation de mémoire\n"COLOR_RESET);
         return;
     }
 
-    printf(YELLOW "Amélioration de la classification des Postes en cours...\n" COLOR_RESET);
+    if (isFirstCall) {
+        file = fopen(htmlFilePath, "w");
+        if (file == NULL) {
+            fprintf(stderr, RED"Erreur lors de la création du fichier HTML\n"COLOR_RESET);
+            free(firewalls);
+            free(servers);
+            free(switchWifi);
+            free(poste);
+            free(telephonie);
+            free(imprimantes);
+            free(others);
+            return;
+        }
 
-    FILE *file = fopen(htmlFilePath, "w");
-    if (file == NULL) {
-        fprintf(stderr, RED"Erreur lors de la création du fichier HTML\n"COLOR_RESET);
-        free(firewalls);
-        free(servers);
-        free(switchWifi);
-        free(poste);
-        free(telephonie);
-        free(imprimantes);
-        free(others);
-        return;
+        fprintf(file, "<!DOCTYPE html>\n<html lang=\"fr-FR\">");
+        fprintf(file, "<meta charset=\"UTF-8\">\n");
+        fprintf(file, "<title>Rapport de Scan Réseau</title>\n</head>\n");
+        fprintf(file, "<style>\n");
+        fprintf(file, "@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');\n");
+        fprintf(file, "body { font-family: 'Roboto', sans-serif; margin: 0; padding: 0; background-color: #000; color: #fff; }\n");
+        fprintf(file, ".container { width: 65%%; margin: 0 auto; padding: 20px; background-color: #333; box-shadow: 0 0 20px rgba(0, 0, 0, 0.5); }\n");
+        fprintf(file, "h1 { text-align: center; color:rgb(255, 255, 255); }\n");
+        fprintf(file, ".heart-red { color: #FF0000; }\n");
+        fprintf(file, ".max-black { color:rgb(255, 255, 255); }\n");
+        fprintf(file, ".firewall-container, .server-container, .switch-wifi-container, .poste-container, .telephonie-container, .imprimante-container, .other-container { margin-bottom: 20px; background-color: #222; padding: 10px; border-radius: 8px; }\n");
+        fprintf(file, ".firewall-container h2, .server-container h2, .switch-wifi-container h2, .poste-container h2, .telephonie-container h2, .imprimante-container h2, .other-container h2 { background-color:rgb(0, 97, 243); color: #000; padding: 10px; border-radius: 5px; }\n");
+        fprintf(file, ".host { border: 1px solid #555; padding: 10px; margin-bottom: 10px; border-radius: 5px; background-color: #222; }\n");
+        fprintf(file, ".host p { margin: 5px 0; }\n");
+        fprintf(file, "a { color:rgb(0, 97, 243); text-decoration: none; }\n");
+        fprintf(file, "a:hover { text-decoration: underline; color: #FFF; }\n");
+        fprintf(file, "@media print { .container { width: 100%%; } }\n");
+        fprintf(file, ".accordion { cursor: pointer; width: 100%%; border: none; text-align: left; outline: none; font-size: 20px; transition: 0.4s; }\n");
+        fprintf(file, ".panel { display: none; overflow: hidden; }\n");
+        fprintf(file, ".vlan-section { margin-top: 30px; padding-top: 20px; border-top: 2px solid #444; }\n");
+        fprintf(file, "</style>\n");
+        fprintf(file, "<body>\n");
+        fprintf(file, "<script src='https://code.jquery.com/jquery-3.5.1.min.js'></script>\n");
+        fprintf(file, "<script>\n");
+        fprintf(file, "$(document).ready(function(){\n");
+        fprintf(file, "  $('.accordion').click(function(){\n");
+        fprintf(file, "    this.classList.toggle('active');\n");
+        fprintf(file, "    var panel = this.nextElementSibling;\n");
+        fprintf(file, "    if (panel.style.display === 'block') {\n");
+        fprintf(file, "      panel.style.display = 'none';\n");
+        fprintf(file, "    } else {\n");
+        fprintf(file, "      panel.style.display = 'block';\n");
+        fprintf(file, "    }\n");
+        fprintf(file, "  });\n");
+        fprintf(file, "});\n");
+        fprintf(file, "</script>\n");
+        fprintf(file, "<div class='container'>\n");
+        fprintf(file, "<h1>Network Scanner - <span class='max-black'>Entreprise</span><span class='heart-red'>X</span></h1>\n");
+        isFirstCall = 0;
+    } else {
+        file = fopen(htmlFilePath, "a");
+        if (file == NULL) {
+            fprintf(stderr, RED"Erreur lors de l'ouverture du fichier HTML\n"COLOR_RESET);
+            free(firewalls);
+            free(servers);
+            free(switchWifi);
+            free(poste);
+            free(telephonie);
+            free(imprimantes);
+            free(others);
+            return;
+        }
     }
 
-    fprintf(file, "<!DOCTYPE html>\n<html lang=\"fr-FR\">");
-    fprintf(file, "<meta charset=\"UTF-8\">\n");
-    fprintf(file, "<title>Rapport de Scan Réseau</title>\n</head>\n");
-    fprintf(file, "<style>\n");
-    fprintf(file, "@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');\n");
-    fprintf(file, "body { font-family: 'Roboto', sans-serif; margin: 0; padding: 0; background-color: #000; color: #fff; }\n");
-    fprintf(file, ".container { width: 65%; margin: 0 auto; padding: 20px; background-color: #333; box-shadow: 0 0 20px rgba(0, 0, 0, 0.5); }\n");
-    fprintf(file, "h1 { text-align: center; color:rgb(255, 255, 255); }\n");
-    fprintf(file, ".heart-red { color: #FF0000; }\n");
-    fprintf(file, ".max-black { color:rgb(255, 255, 255); }\n");
-    fprintf(file, ".firewall-container, .server-container, .switch-wifi-container, .poste-container, .telephonie-container, .imprimante-container, .other-container { margin-bottom: 20px; background-color: #222; padding: 10px; border-radius: 8px; }\n");
-    fprintf(file, ".firewall-container h2, .server-container h2, .switch-wifi-container h2, .poste-container h2, .telephonie-container h2, .imprimante-container h2, .other-container h2 { background-color:rgb(0, 97, 243); color: #000; padding: 10px; border-radius: 5px; }\n");
-    fprintf(file, ".host { border: 1px solid #555; padding: 10px; margin-bottom: 10px; border-radius: 5px; background-color: #222; }\n");
-    fprintf(file, ".host p { margin: 5px 0; }\n");
-    fprintf(file, "a { color:rgb(0, 97, 243); text-decoration: none; }\n");
-    fprintf(file, "a:hover { text-decoration: underline; color: #FFF; }\n");
-    fprintf(file, "@media print { .container { width: 100%; } }\n");
-    fprintf(file, ".accordion { cursor: pointer; width: 100%; border: none; text-align: left; outline: none; font-size: 20px; transition: 0.4s; }\n");
-    fprintf(file, ".panel { display: none; overflow: hidden; }\n");
-    fprintf(file, "</style>\n");
-    fprintf(file, "<body>\n");
-    fprintf(file, "<script src='https://code.jquery.com/jquery-3.5.1.min.js'></script>\n");
-    fprintf(file, "<script>\n");
-    fprintf(file, "$(document).ready(function(){\n");
-    fprintf(file, "  $('.accordion').click(function(){\n");
-    fprintf(file, "    this.classList.toggle('active');\n");
-    fprintf(file, "    var panel = this.nextElementSibling;\n");
-    fprintf(file, "    if (panel.style.display === 'block') {\n");
-    fprintf(file, "      panel.style.display = 'none';\n");
-    fprintf(file, "    } else {\n");
-    fprintf(file, "      panel.style.display = 'block';\n");
-    fprintf(file, "    }\n");
-    fprintf(file, "  });\n");
-    fprintf(file, "});\n");
-    fprintf(file, "</script>\n");
-    fprintf(file, "<div class='container'>\n");
-    fprintf(file, "<h1>Network Scanner - <span class='max-black'>Entreprise</span><span class='heart-red'>X</span></h1>\n");
+    if (isVLAN) {
+        fprintf(file, "<div class='vlan-section'>\n");
+        fprintf(file, "<h2>VLAN %d</h2>\n", vlan_id);
+    }
+
+    printf(YELLOW "Amélioration de la classification des Postes en cours...\n" COLOR_RESET);
 
     int hasFirewalls = 0, hasServers = 0, hasSwitchWifi = 0, hasPoste = 0, hasTelephonie = 0, hasImprimantes = 0, hasOthers = 0; 
 
@@ -964,7 +987,14 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
         fprintf(file, "<div class='other-container'><h2>Autres</h2>\n%s</div>\n", others);
     }
 
-    fprintf(file, "</div>\n</body>\n</html>"); 
+    if (isVLAN) {
+        fprintf(file, "</div>\n"); // Fermeture de la section VLAN
+    }
+
+    if (isFirstCall) {
+        fprintf(file, "</div>\n</body>\n</html>"); 
+    }
+
     fclose(file);
 
     free(firewalls);
@@ -975,7 +1005,109 @@ void createHtml(json_object *jsonRoot, const char *htmlFilePath) {
     free(imprimantes);
     free(others);
 
-    printf(RED "Rapport HTML généré. %s\n" COLOR_RESET, htmlFilePath);
+    if (isFirstCall) {
+        printf(RED "Rapport HTML généré. %s\n" COLOR_RESET, htmlFilePath);
+    }
+}
+
+void scanAndClassifyVLANHosts(struct json_object *parsed_json, const char *htmlFilePath) {
+    struct json_object *vlans;
+    if (!json_object_object_get_ex(parsed_json, "VLANs", &vlans)) {
+        return;
+    }
+
+    size_t vlan_count = json_object_array_length(vlans);
+    if (vlan_count == 0) {
+        return;
+    }
+
+    printf(YELLOW "Début du scan des VLANs & création du rapport\n" COLOR_RESET);
+
+    for (size_t i = 0; i < vlan_count; i++) {
+        struct json_object *vlan = json_object_array_get_idx(vlans, i);
+        struct json_object *activeHosts;
+        int vlan_id;
+        
+        if (!json_object_object_get_ex(vlan, "ActiveHosts", &activeHosts)) {
+            continue;
+        }
+
+        if (!json_object_is_type(activeHosts, json_type_array)) {
+            continue;
+        }
+
+        vlan_id = json_object_get_int(json_object_object_get(vlan, "ID"));
+        printf(YELLOW "Configuration et scan du VLAN %d en cours...\n" COLOR_RESET, vlan_id);
+
+        // Configuration de l'interface pour ce VLAN
+        char vlan_interface[16];
+        snprintf(vlan_interface, sizeof(vlan_interface), "vlan%d", vlan_id);
+        
+        // Suppression de l'ancienne interface VLAN si elle existe
+        char command[256];
+        snprintf(command, sizeof(command), "ip link delete %s 2>/dev/null", vlan_interface);
+        system(command);
+
+        // Création de la nouvelle interface VLAN
+        snprintf(command, sizeof(command), "ip link add link %s name %s type vlan id %d", interface, vlan_interface, vlan_id);
+        if (system(command) != 0) {
+            fprintf(stderr, RED "Erreur lors de la création de l'interface VLAN %d\n" COLOR_RESET, vlan_id);
+            continue;
+        }
+
+        // Activation de l'interface VLAN
+        snprintf(command, sizeof(command), "ip link set dev %s up", vlan_interface);
+        if (system(command) != 0) {
+            fprintf(stderr, RED "Erreur lors de l'activation de l'interface VLAN %d\n" COLOR_RESET, vlan_id);
+            continue;
+        }
+
+        // Attente de l'obtention d'une adresse IP
+        printf(YELLOW "Attente de l'obtention d'une adresse IP sur le VLAN %d...\n" COLOR_RESET, vlan_id);
+        snprintf(command, sizeof(command), "dhclient %s", vlan_interface);
+        system(command);
+        sleep(5); // Attente pour la configuration DHCP
+
+        // Création des noms de fichiers spécifiques pour ce VLAN
+        char xml_file[256];
+        char json_file[256];
+        snprintf(xml_file, sizeof(xml_file), "./nmap_vlan_%d.xml", vlan_id);
+        snprintf(json_file, sizeof(json_file), "./nmap_vlan_%d.json", vlan_id);
+
+        // Scan des hôtes du VLAN
+        scanAllHostsAndSaveToXML(activeHosts);
+        // Renommer le fichier XML généré
+        rename("./nmap.xml", xml_file);
+        
+        // Conversion XML vers JSON
+        readXMLAndSaveToJson(xml_file, json_file);
+
+        struct json_object *jsonRoot = json_object_from_file(json_file);
+        if (jsonRoot == NULL) {
+            fprintf(stderr, RED "Erreur: Impossible de lire %s\n" COLOR_RESET, json_file);
+            continue;
+        }
+
+        if (!json_object_is_type(jsonRoot, json_type_array)) {
+            fprintf(stderr, RED "Erreur: Le contenu JSON n'est pas un tableau\n" COLOR_RESET);
+            json_object_put(jsonRoot);
+            continue;
+        }
+
+        // Création du rapport HTML pour ce VLAN
+        createHtml(jsonRoot, htmlFilePath, 1, vlan_id);
+        json_object_put(jsonRoot);
+
+        // Nettoyage des fichiers temporaires
+        remove(xml_file);
+        remove(json_file);
+
+        // Nettoyage de l'interface VLAN
+        snprintf(command, sizeof(command), "ip link delete %s", vlan_interface);
+        system(command);
+
+        printf(GREEN "Scan du VLAN %d terminé\n" COLOR_RESET, vlan_id);
+    }
 }
 
 void signalHandler(int signum) {
@@ -991,7 +1123,6 @@ void cleanup() {
 }
 
 int main() {
-
     printf("\033[H\033[J");
     char *jsonFilePath = "./network_info.json";
     char *vlanJsonFilePath = "./network_info_vlan.json";
@@ -1016,7 +1147,7 @@ int main() {
     changeMACAddressAndRenewIP(interface);
 
     struct json_object *parsed_json, *defaultNetwork, *activeHosts;
-    printf("Début du Scan DefaultNetwork & création du raport\n");
+    printf("Début du Scan DefaultNetwork & création du rapport\n");
 
     parsed_json = json_object_from_file("./network.json");
     if (parsed_json == NULL) {
@@ -1043,26 +1174,29 @@ int main() {
     }
 
     scanAllHostsAndSaveToXML(activeHosts);
-
     readXMLAndSaveToJson("./nmap.xml", "./nmap.json");
-
-    json_object_put(parsed_json);
 
     struct json_object *jsonRoot = json_object_from_file("./nmap.json");
     if (jsonRoot == NULL) {
         fprintf(stderr, RED "Erreur: Impossible de lire ./nmap.json\n" COLOR_RESET);
+        json_object_put(parsed_json);
         return 1;
     }
 
     if (!json_object_is_type(jsonRoot, json_type_array)) {
         fprintf(stderr, RED "Erreur: Le contenu JSON n'est pas un tableau\n" COLOR_RESET);
         json_object_put(jsonRoot);
+        json_object_put(parsed_json);
         return 1;
     }
 
-    createHtml(jsonRoot, "./rapport.html");
-
+    // Création du rapport HTML pour le DefaultNetwork
+    createHtml(jsonRoot, "./rapport.html", 0, 0);
     json_object_put(jsonRoot);
 
+    // Scanner et classifier les hôtes des VLANs
+    scanAndClassifyVLANHosts(parsed_json, "./rapport.html");
+
+    json_object_put(parsed_json);
     return 0;
 }
