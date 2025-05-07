@@ -74,7 +74,8 @@ def main():
                 # Network category options
                 network_options = [
                     "Discovery (local network info, port switch, VLANs issues)",
-                    "Scanner (nmap scan after an initial Discovery analysis)"
+                    "Scanner (nmap scan after an initial Discovery analysis)",
+                    "MITM (printer traffic interception and analysis)"
                 ]
                 try:
                     network_choice = display_options(network_options, "Please select a program to run:")
@@ -84,7 +85,8 @@ def main():
 
                 commands = {
                     0: './discovery',
-                    1: './scanner'
+                    1: './scanner',
+                    2: 'python3 mitm.py'
                 }
                 try:
                     run_command(commands[network_choice])
