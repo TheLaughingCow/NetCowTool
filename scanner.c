@@ -74,62 +74,37 @@ void changeMACAddressAndRenewIP(char *interface) {
     int status;
     char command[256];
 
+    printf(YELLOW"[*] Arrêt de NetworkManager...\n" COLOR_RESET);
     status = system("systemctl stop NetworkManager");
     if (status != 0) {
-        fprintf(stderr, "Erreur lors de l'arrêt de NetworkManager\n");
+        printf(RED"[✗] Erreur lors de l'arrêt de NetworkManager\n" COLOR_RESET);
         return;
     }
 
-    sprintf(command, "dhclient -r %s", interface);
-    status = system(command);
-    if (status != 0) {
-        fprintf(stderr, "Erreur lors de la libération du bail DHCP\n");
-        return;
-    }
-
-    sprintf(command, "ip addr flush dev %s", interface);
-    status = system(command);
-    if (status != 0) {
-        fprintf(stderr, "Erreur lors du flush de l'adresse IP de l'interface\n");
-        return;
-    }
-
-    sprintf(command, "ip link set %s down", interface);
-    status = system(command);
-    if (status != 0) {
-        fprintf(stderr, "Erreur lors de la désactivation de l'interface réseau\n");
-        return;
-    }
-
-    printf("Modification de l'adresse MAC...\n");
+    printf(YELLOW"[*] Modification de l'adresse MAC...\n" COLOR_RESET);
     sprintf(command, "macchanger -r %s > /dev/null", interface);
     status = system(command);
     if (status != 0) {
-        fprintf(stderr, "Erreur lors du changement d'adresse MAC\n");
+        printf(RED"[✗] Erreur lors du changement d'adresse MAC\n" COLOR_RESET);
         return;
     }
 
-    sprintf(command, "ip link set %s up", interface);
-    status = system(command);
-    if (status != 0) {
-        fprintf(stderr, "Erreur lors de la réactivation de l'interface réseau\n");
-        return;
-    }
-
-    sleep(2);
-
+    printf(YELLOW"[*] Renouvellement de l'adresse IP...\n" COLOR_RESET);
     sprintf(command, "dhclient %s", interface);
     status = system(command);
     if (status != 0) {
-        fprintf(stderr, "Erreur lors du renouvellement du bail DHCP\n");
+        printf(RED"[✗] Erreur lors du renouvellement du bail DHCP\n" COLOR_RESET);
         return;
     }
 
+    printf(YELLOW"[*] Redémarrage de NetworkManager...\n" COLOR_RESET);
     status = system("systemctl restart NetworkManager");
     if (status != 0) {
-        fprintf(stderr, "Erreur lors du redémarrage de NetworkManager\n");
+        printf(RED"[✗] Erreur lors du redémarrage de NetworkManager\n" COLOR_RESET);
         return;
     }
+
+    printf(GREEN"[✓] Configuration réseau mise à jour avec succès\n" COLOR_RESET);
 }
 
 char* getLocalNetworkAddress(char *jsonFilePath) {
@@ -158,9 +133,18 @@ void scanActiveHostsAndUpdateJSON(char *network, char *jsonFilePath, int vlan_id
     char command[256];
     char line[1035];
     struct json_object *parsed_json, *vlans, *vlan, *activeHostsArray, *targetNetworkObject;
+    char network_with_mask[256];
 
-    sprintf(command, "nmap -sn %s | grep 'Nmap scan report for' | awk '{print $NF}' | sed 's/[()]//g'", network);
-    printf(YELLOW"...Scan Nmap en cours" COLOR_RESET " reseau: "YELLOW "%s...\n" COLOR_RESET, network);
+    // Ajouter le masque /24 uniquement pour le réseau par défaut
+    if (vlan_id == -1) {
+        snprintf(network_with_mask, sizeof(network_with_mask), "%s/24", network);
+    } else {
+        strncpy(network_with_mask, network, sizeof(network_with_mask) - 1);
+        network_with_mask[sizeof(network_with_mask) - 1] = '\0';
+    }
+
+    sprintf(command, "nmap -sn %s | grep 'Nmap scan report for' | awk '{print $NF}' | sed 's/[()]//g'", network_with_mask);
+    printf(YELLOW"...Scan Nmap en cours" COLOR_RESET " reseau: "YELLOW "%s...\n" COLOR_RESET, network_with_mask);
 
     if (vlan_id == -1) {
         parsed_json = json_object_from_file(jsonFilePath);
@@ -199,32 +183,50 @@ void scanActiveHostsAndUpdateJSON(char *network, char *jsonFilePath, int vlan_id
     if (activeHostsArray == NULL) {
         activeHostsArray = json_object_new_array();
         json_object_object_add(targetNetworkObject, "ActiveHosts", activeHostsArray);
-    } else {
-        struct json_object *newArray = json_object_new_array();
-        json_object_object_del(targetNetworkObject, "ActiveHosts");
-        json_object_object_add(targetNetworkObject, "ActiveHosts", newArray);
-        activeHostsArray = newArray;
     }
+
+    struct json_object *newHostsArray = json_object_new_array();
 
     fp = popen(command, "r");
     if (fp == NULL) {
         perror("Erreur lors de l'exécution de nmap");
         json_object_put(parsed_json);
+        json_object_put(newHostsArray);
         return;
     }
 
     while (fgets(line, sizeof(line), fp) != NULL) {
         line[strcspn(line, "\n")] = 0;
-        json_object_array_add(activeHostsArray, json_object_new_string(line));
+        json_object_array_add(newHostsArray, json_object_new_string(line));
     }
 
     pclose(fp);
 
+    size_t n_new_hosts = json_object_array_length(newHostsArray);
+    for (size_t i = 0; i < n_new_hosts; i++) {
+        const char *new_ip = json_object_get_string(json_object_array_get_idx(newHostsArray, i));
+        int ip_exists = 0;
+
+        size_t n_existing_hosts = json_object_array_length(activeHostsArray);
+        for (size_t j = 0; j < n_existing_hosts; j++) {
+            const char *existing_ip = json_object_get_string(json_object_array_get_idx(activeHostsArray, j));
+            if (strcmp(new_ip, existing_ip) == 0) {
+                ip_exists = 1;
+                break;
+            }
+        }
+
+        if (!ip_exists) {
+            json_object_array_add(activeHostsArray, json_object_new_string(new_ip));
+        }
+    }
+
     json_object_to_file((vlan_id == -1) ? jsonFilePath : vlanFilePath, parsed_json);
 
     json_object_put(parsed_json);
+    json_object_put(newHostsArray);
 
-    printf(GREEN "...Scan terminé...\n"COLOR_RESET);
+    printf(GREEN"[✓] Scan terminé pour %s\n" COLOR_RESET, network_with_mask);
 }
 
 void setVLAN(char *interface, int vlan_id) {
@@ -233,17 +235,24 @@ void setVLAN(char *interface, int vlan_id) {
 
     sprintf(vlan_interface, "vlan%d", vlan_id);
 
-    sprintf(command, "ip link delete %s", vlan_interface);
+    printf(YELLOW"[*] Configuration de l'interface VLAN %d...\n" COLOR_RESET, vlan_id);
+
+    sprintf(command, "ip link delete %s 2>/dev/null", vlan_interface);
     system(command);
 
     sprintf(command, "ip link add link %s name %s type vlan id %d", interface, vlan_interface, vlan_id);
-    system(command);
+    if (system(command) != 0) {
+        printf(RED"[✗] Erreur lors de la création de l'interface VLAN %d\n" COLOR_RESET, vlan_id);
+        return;
+    }
 
     sprintf(command, "ip link set dev %s up", vlan_interface);
-    system(command);
+    if (system(command) != 0) {
+        printf(RED"[✗] Erreur lors de l'activation de l'interface VLAN %d\n" COLOR_RESET, vlan_id);
+        return;
+    }
 
-    printf("Interface " YELLOW "VLAN %d" COLOR_RESET " configurée.\n", vlan_id);
-
+    printf(GREEN"[✓] Interface VLAN %d configurée avec succès\n" COLOR_RESET, vlan_id);
 }
 
 void waitForDHCP(char *vlan_interface) {
@@ -402,10 +411,43 @@ void processVLANs(char *interface, char *jsonFilePath) {
 
 void mergeAndDeleteJSONFiles(const char *filePath1, const char *filePath2, const char *mergedFilePath) {
     struct json_object *json1 = NULL, *json2 = NULL, *merged_json, *json1_vlans, *json2_vlans, *vlan;
+    struct json_object *defaultNetwork1, *defaultNetwork2, *activeHosts1, *activeHosts2;
     int i, j;
 
     json1 = json_object_from_file(filePath1);
     json2 = json_object_from_file(filePath2);
+
+    // Fusion des hôtes actifs du réseau par défaut
+    if (json1 && json_object_object_get_ex(json1, "DefaultNetwork", &defaultNetwork1)) {
+        // Si ActiveHosts1 n'existe pas, on le crée
+        if (!json_object_object_get_ex(defaultNetwork1, "ActiveHosts", &activeHosts1)) {
+            activeHosts1 = json_object_new_array();
+            json_object_object_add(defaultNetwork1, "ActiveHosts", activeHosts1);
+        }
+
+        if (json2 && json_object_object_get_ex(json2, "DefaultNetwork", &defaultNetwork2) &&
+            json_object_object_get_ex(defaultNetwork2, "ActiveHosts", &activeHosts2)) {
+            
+            size_t n_hosts = json_object_array_length(activeHosts2);
+            for (size_t i = 0; i < n_hosts; i++) {
+                const char *new_ip = json_object_get_string(json_object_array_get_idx(activeHosts2, i));
+                int exists = 0;
+
+                size_t existing_count = json_object_array_length(activeHosts1);
+                for (size_t j = 0; j < existing_count; j++) {
+                    const char *existing_ip = json_object_get_string(json_object_array_get_idx(activeHosts1, j));
+                    if (strcmp(existing_ip, new_ip) == 0) {
+                        exists = 1;
+                        break;
+                    }
+                }
+
+                if (!exists) {
+                    json_object_array_add(activeHosts1, json_object_get(json_object_array_get_idx(activeHosts2, i)));
+                }
+            }
+        }
+    }
 
     if (!json1 || !json_object_object_get_ex(json1, "VLANs", &json1_vlans)) {
         json1_vlans = json_object_new_array();
@@ -435,9 +477,9 @@ void mergeAndDeleteJSONFiles(const char *filePath1, const char *filePath2, const
     merged_json = json1 ? json1 : json_object_new_object();
 
     if (json_object_to_file(mergedFilePath, merged_json) != 0) {
-        perror("Erreur lors de l'écriture du fichier JSON fusionné");
+        printf(RED"[✗] Erreur lors de l'écriture du fichier JSON fusionné\n" COLOR_RESET);
     } else {
-        printf(RED "Rapport json généré : %s\n" COLOR_RESET, mergedFilePath);
+        printf(GREEN"[✓] Rapport JSON généré avec succès : %s\n" COLOR_RESET, mergedFilePath);
     }
 
     json_object_put(merged_json);
@@ -1202,7 +1244,7 @@ int main() {
 
     signal(SIGINT, signalHandler);
     atexit(cleanup);
-    printf(GREEN "Interface réseau :" COLOR_RESET " %s\n", interface);
+    printf(GREEN"[✓] Interface réseau détectée : %s\n" COLOR_RESET, interface);
 
     changeMACAddressAndRenewIP(interface);
     char* networkAddress = getLocalNetworkAddress(jsonFilePath);
