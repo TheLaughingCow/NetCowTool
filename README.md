@@ -10,23 +10,31 @@ Please select a category:
   Wifi
 
 Please select a program to run:                                                   
-> Discovery (local network info, port switch, VLANs issues)                                    
-  Scanner (nmap scan after an initial discovery analysis)
+> Discovery (local network info, port switch, VLANs issues)                                                                                
+  Scanner (nmap scan after an initial Discovery analysis)                                                                                  
+  MITM (printer traffic interception and analysis)                                                                                         
+  Egress (outbound port filtering analysis)
 ```
-or :
-
-```bash
-sudo ./discovery
-```
+Discovery results:
 <center>
 <img src="https://github.com/TheLaughingCow/discovery/blob/main/md01.png"/>
 </center>
 
+Scanner results:
 ```bash
-sudo ./scanner
+  Discovery (local network info, port switch, VLANs issues)                                                                                
+> Scanner (nmap scan after an initial Discovery analysis)                                                                                  
+  MITM (printer traffic interception and analysis)                                                                                         
+  Egress (outbound port filtering analysis)
 ```
 <center>
 <img src="https://github.com/TheLaughingCow/discovery/blob/main/md02.png"/>
+</center>
+<center>
+<img src="https://github.com/TheLaughingCow/discovery/blob/main/md04.png"/>
+</center>
+<center>
+<img src="https://github.com/TheLaughingCow/discovery/blob/main/md03.png"/>
 </center>
 
 ## Prerequisites
@@ -65,16 +73,9 @@ After installation, you can run `sudo python3 netcowtool.py` or the programs as 
 
 ```bash
 sudo ./discovery
-sudo ./ssid
-sudo ./scanner
+python3 mitm.py
 ```
 ## Todo List - Future Improvements
-
-**Python Launcher:**
-Create a Python launcher with simple and multiple choice options to select the desired program to run.
-
-**Specific Discovery Programs:**
-Develop specific discovery programs to search for switches, IP phones, Windows, Linux.
 
 **Better Host Ranking in Scanner:**
 Implement more sophisticated algorithms for host evaluation and ranking to enhance the accuracy and usefulness of the scanner program.
