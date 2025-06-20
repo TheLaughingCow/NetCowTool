@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import subprocess
 import os
 import sys
@@ -62,7 +64,6 @@ def main():
                     print("Invalid choice. Please enter 'y' or 'n'.")
                     continue
 
-            # Main categories
             categories = ["Network", "Wifi"]
             try:
                 category_index = display_options(categories, "Please select a category:")
@@ -71,10 +72,10 @@ def main():
                 break
 
             if category_index == 0:
-                # Network category options
                 network_options = [
                     "Discovery (local network info, port switch, VLANs issues)",
                     "Scanner (nmap scan after an initial Discovery analysis)",
+                    "Sniffer (analyze vulnerabilities by listening to network packets)",
                     "MITM (printer traffic interception and analysis)",
                     "Egress (outbound port filtering analysis)"
                 ]
@@ -87,8 +88,9 @@ def main():
                 commands = {
                     0: './discovery',
                     1: './scanner',
-                    2: 'python3 mitm.py',
-                    3: 'python3 egress.py'
+                    2: 'python3 above.py --timer 240',
+                    3: 'python3 mitm.py',
+                    4: 'python3 egress.py'
                 }
                 try:
                     run_command(commands[network_choice])
@@ -97,7 +99,6 @@ def main():
                     continue
 
             elif category_index == 1:
-                # Wifi category options
                 wifi_options = [
                     "SSID (Detects and classifies nearby SSIDs)"
                 ]
