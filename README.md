@@ -44,7 +44,6 @@ Scanner results:
 This setup and the corresponding scripts have been successfully tested on the following systems:
 
     Debian
-    Kaisen Linux
     Kali Linux
     
 #### Libraries and Compilation Environment
