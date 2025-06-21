@@ -15,6 +15,11 @@
 #include <signal.h>
 #include <time.h>
 #include <ctype.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <sys/types.h>
 
 #define GREEN   "\x1b[32m"
 #define YELLOW  "\x1b[33m"
@@ -31,6 +36,7 @@ VlanInfo found_vlans[MAX_VLAN];
 int vlan_count = 0;
 int vlan_found = 0;
 volatile sig_atomic_t stop_program = 0;
+time_t last_vlan_time = 0;
 
 void handle_signal(int signal) {
     stop_program = 1;
@@ -259,18 +265,8 @@ void packet_handler(unsigned char *user_data, const struct pcap_pkthdr *pkthdr, 
         return;
     }
 
-    static time_t last_time = 0;
-    static time_t start_time = 0;
-    static int first_call = 1;
-    time_t current_time;
-
-    if (first_call) {
-        start_time = time(NULL);
-        first_call = 0;
-    }
-
     struct ether_header *eth_header;
-    struct ip *ip_header;
+    struct iphdr *ip_header;
 
     eth_header = (struct ether_header *) packet;
 
@@ -287,10 +283,12 @@ void packet_handler(unsigned char *user_data, const struct pcap_pkthdr *pkthdr, 
         }
 
         if (!found) {
-            if (pkthdr->len >= 18 + sizeof(struct ip)) {
-                ip_header = (struct ip *)(packet + 18);
+            if (pkthdr->len >= 18 + sizeof(struct iphdr)) {
+                ip_header = (struct iphdr *)(packet + 18);
                 char src_ip[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &(ip_header->ip_src), src_ip, INET_ADDRSTRLEN);
+                struct in_addr addr;
+                addr.s_addr = ip_header->saddr;
+                inet_ntop(AF_INET, &addr, src_ip, INET_ADDRSTRLEN);
 
                 found_vlans[vlan_count].id = vlan_id;
                 snprintf(found_vlans[vlan_count].network_addr, INET_ADDRSTRLEN, "%s", src_ip);
@@ -319,31 +317,14 @@ void packet_handler(unsigned char *user_data, const struct pcap_pkthdr *pkthdr, 
                 fclose(fp);
             }
             vlan_found = 1;
-            last_time = time(NULL);
+            last_vlan_time = time(NULL);
         }
     }
 
-    current_time = time(NULL);
-
-    if (vlan_count > 0 && (current_time - last_time >= 35)) {
-        printf("\n");
-        printf(RED "No new VLAN found in the last 35 seconds. Stopping VLAN search.\n" COLOR_RESET);
-        printf("\n");
-        pcap_breakloop((pcap_t *)user_data);
-        return;
-    }
-
-    if (vlan_count == 0 && (current_time - start_time >= 60)) {
-        printf("\n");
-        printf(RED "No VLAN found in the first 60 seconds. Stopping VLAN search.\n" COLOR_RESET);
-        printf("\n");
-        pcap_breakloop((pcap_t *)user_data);
-        return;
-    }
 }
 
 void save_initial_info(const char *gateway_ip, const char *dns_server, const char *dhcp_server, const char *local_network_address) {
-    // Supprimer le fichier s'il existe
+
     remove("./network_info.json");
     
     FILE *fp = fopen("./network_info.json", "w");
@@ -364,31 +345,110 @@ void save_initial_info(const char *gateway_ip, const char *dns_server, const cha
     fclose(fp);
 }
 
-void scanNearbyNetworks(const char *local_ip, const char *gateway) {
+int get_subnet_from_ip(const char *ip) {
+    char *last_dot = strrchr(ip, '.');
+    if (last_dot) {
+        return atoi(last_dot + 1);
+    }
+    return -1;
+}
+
+int is_network_already_added(const char *network, char added_networks[256][32], int added_count) {
+    for (int i = 0; i < added_count; i++) {
+        if (strcmp(added_networks[i], network) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void add_network_to_list(const char *network, char added_networks[256][32], int *added_count) {
+    if (*added_count < 256) {
+        strcpy(added_networks[*added_count], network);
+        (*added_count)++;
+    }
+}
+
+void check_and_add_network(const char *ip, const char *type, const char *network_prefix, int local_subnet, 
+                          char added_networks[256][32], int *added_count, int *first_network) {
+    if (strlen(ip) == 0 || strcmp(ip, "Unknown") == 0 || strcmp(ip, "Error") == 0) {
+        return;
+    }
+    
+    char ip_prefix[32];
+    char *first_dot = strchr(ip, '.');
+    char *second_dot = strchr(first_dot + 1, '.');
+    if (first_dot && second_dot) {
+        strncpy(ip_prefix, ip, second_dot - ip);
+        ip_prefix[second_dot - ip] = '\0';
+    } else {
+        return;
+    }
+    
+    if (strcmp(ip_prefix, network_prefix) != 0) {
+        return;
+    }
+    
+    int ip_subnet = get_subnet_from_ip(ip);
+    if (ip_subnet == -1 || ip_subnet == local_subnet) {
+        return;
+    }
+    
+    char network_addr[32];
+    snprintf(network_addr, sizeof(network_addr), "%s.%d.0/24", network_prefix, ip_subnet);
+    
+    if (is_network_already_added(network_addr, added_networks, *added_count)) {
+        return;
+    }
+    
+    char command[256];
+    sprintf(command, "ping -c 1 -W 1 %s.%d.1 > /dev/null 2>&1", network_prefix, ip_subnet);
+    if (system(command) == 0) {
+        printf(GREEN "Accessible network : %s (%s)\n" COLOR_RESET, network_addr, type);
+        
+        FILE *json_file = fopen("./network_info.json", "a");
+        if (json_file != NULL) {
+            if (!(*first_network)) {
+                fprintf(json_file, ",\n");
+            }
+            fprintf(json_file, "    {\n");
+            fprintf(json_file, "      \"NearbyNetworkAddress\": \"%s\",\n", network_addr);
+            fprintf(json_file, "      \"Type\": \"%s\",\n", type);
+            fprintf(json_file, "      \"ActiveHosts\": []\n");
+            fprintf(json_file, "    }");
+            *first_network = 0;
+            fclose(json_file);
+            
+            add_network_to_list(network_addr, added_networks, added_count);
+        }
+    }
+}
+
+void scanNearbyNetworks(const char *local_ip, const char *gateway, const char *dns_server) {
     char command[256];
     char network_prefix[32];
     FILE *json_file;
     char switch_ip[INET_ADDRSTRLEN] = {0};
     int first_network = 1;
     
-    // Ouvrir la section NearbyNetworks
+    char added_networks[256][32];
+    int added_count = 0;
+    
     json_file = fopen("./network_info.json", "a");
     if (json_file != NULL) {
-        fprintf(json_file, "\n  ],\n");  // Fermer la section VLANs
+        fprintf(json_file, "\n  ],\n");
         fprintf(json_file, "  \"NearbyNetworks\": [\n");
         fclose(json_file);
     }
     
-    // Récupérer l'IP du switch depuis LLDP
     FILE *fp = popen("lldpctl | grep 'MgmtIP:' | awk '{print $2}'", "r");
     if (fp != NULL) {
         if (fgets(switch_ip, INET_ADDRSTRLEN, fp) != NULL) {
-            switch_ip[strcspn(switch_ip, "\n")] = 0; // Enlever le retour à la ligne
+            switch_ip[strcspn(switch_ip, "\n")] = 0;
         }
         pclose(fp);
     }
     
-    // Extraire le préfixe réseau (ex: 10.64)
     char *first_dot = strchr(local_ip, '.');
     char *second_dot = strchr(first_dot + 1, '.');
     if (first_dot && second_dot) {
@@ -397,38 +457,22 @@ void scanNearbyNetworks(const char *local_ip, const char *gateway) {
     } else {
         strcpy(network_prefix, local_ip);
     }
+    
+    int local_subnet = get_subnet_from_ip(local_ip);
 
     printf(YELLOW "...Search for accessible subnets...\n" COLOR_RESET);
     
-    // Vérifier d'abord le réseau du switch si on a son IP
     if (strlen(switch_ip) > 0) {
-        // Extraire le préfixe réseau du switch
-        char *last_dot = strrchr(switch_ip, '.');
-        if (last_dot) {
-            *last_dot = '\0';
-            sprintf(command, "ping -c 1 -W 1 %s.1 > /dev/null 2>&1", switch_ip);
-            if (system(command) == 0) {
-                printf(GREEN "Accessible network : %s.0/24\n" COLOR_RESET, switch_ip);
-                
-                // Ajouter le réseau du switch au JSON
-                json_file = fopen("./network_info.json", "a");
-                if (json_file != NULL) {
-                    if (!first_network) {
-                        fprintf(json_file, ",\n");
-                    }
-                    fprintf(json_file, "    {\n");
-                    fprintf(json_file, "      \"NearbyNetworkAddress\": \"%s.0/24\",\n", switch_ip);
-                    fprintf(json_file, "      \"Type\": \"Switch Network\",\n");
-                    fprintf(json_file, "      \"ActiveHosts\": []\n");
-                    fprintf(json_file, "    }");
-                    first_network = 0;
-                    fclose(json_file);
-                }
-            }
-        }
+        check_and_add_network(switch_ip, "Switch Network", network_prefix, local_subnet, 
+                             added_networks, &added_count, &first_network);
     }
+    
+    check_and_add_network(gateway, "Gateway Network", network_prefix, local_subnet, 
+                         added_networks, &added_count, &first_network);
+    
+    check_and_add_network(dns_server, "DNS Network", network_prefix, local_subnet, 
+                         added_networks, &added_count, &first_network);
 
-    // Ajouter ensuite le réseau actuel
     json_file = fopen("./network_info.json", "a");
     if (json_file != NULL) {
         if (!first_network) {
@@ -437,7 +481,7 @@ void scanNearbyNetworks(const char *local_ip, const char *gateway) {
         fprintf(json_file, "    {\n");
         fprintf(json_file, "      \"Network\": \"%s.%d.0/24\",\n", 
                 network_prefix, 
-                atoi(strrchr(local_ip, '.') + 1));
+                local_subnet);
         fprintf(json_file, "      \"Type\": \"Current Network\",\n");
         fprintf(json_file, "      \"ActiveHosts\": []\n");
         fprintf(json_file, "    }");
@@ -445,32 +489,37 @@ void scanNearbyNetworks(const char *local_ip, const char *gateway) {
         fclose(json_file);
     }
 
-    // Scanner tous les réseaux possibles de 10.64.0.0 à 10.64.255.0
     printf(YELLOW "...Network scanning %s.0.0 à %s.255.0...\n" COLOR_RESET, network_prefix, network_prefix);
     
     for (int i = 0; i <= 255; i++) {
-        // Ne pas scanner le réseau actuel
-        if (i == atoi(strrchr(local_ip, '.') + 1)) {
+
+        if (i == local_subnet) {
             continue;
         }
 
         sprintf(command, "ping -c 1 -W 1 %s.%d.1 > /dev/null 2>&1", network_prefix, i);
         if (system(command) == 0) {
-            printf(GREEN "Accessible network : %s.%d.0/24\n" COLOR_RESET, network_prefix, i);
+            char network_addr[32];
+            snprintf(network_addr, sizeof(network_addr), "%s.%d.0/24", network_prefix, i);
             
-            // Ajouter le réseau au JSON
-            json_file = fopen("./network_info.json", "a");
-            if (json_file != NULL) {
-                if (!first_network) {
-                    fprintf(json_file, ",\n");
+            if (!is_network_already_added(network_addr, added_networks, added_count)) {
+                printf(GREEN "Accessible network : %s\n" COLOR_RESET, network_addr);
+                
+                json_file = fopen("./network_info.json", "a");
+                if (json_file != NULL) {
+                    if (!first_network) {
+                        fprintf(json_file, ",\n");
+                    }
+                    fprintf(json_file, "    {\n");
+                    fprintf(json_file, "      \"NearbyNetworkAddress\": \"%s\",\n", network_addr);
+                    fprintf(json_file, "      \"Type\": \"Adjacent Network\",\n");
+                    fprintf(json_file, "      \"ActiveHosts\": []\n");
+                    fprintf(json_file, "    }");
+                    first_network = 0;
+                    fclose(json_file);
+                    
+                    add_network_to_list(network_addr, added_networks, &added_count);
                 }
-                fprintf(json_file, "    {\n");
-                fprintf(json_file, "      \"NearbyNetworkAddress\": \"%s.%d.0/24\",\n", network_prefix, i);
-                fprintf(json_file, "      \"Type\": \"Adjacent Network\",\n");
-                fprintf(json_file, "      \"ActiveHosts\": []\n");
-                fprintf(json_file, "    }");
-                first_network = 0;
-                fclose(json_file);
             }
         }
     }
@@ -485,7 +534,6 @@ void finalize_json_file() {
         return;
     }
 
-    // Fermer la section NearbyNetworks et le fichier JSON
     fprintf(fp, "\n  ]\n");
     fprintf(fp, "}\n");
     fclose(fp);
@@ -505,7 +553,6 @@ int main() {
 
     signal(SIGINT, handle_signal);
 
-    // Supprimer le fichier JSON existant avant de commencer
     remove("./network_info.json");
 
     get_network_interface_name(interface);
@@ -517,7 +564,6 @@ int main() {
     get_dns_server_nmcli(dns_server, interface);
     get_dhcp_server(dhcp_server, interface);
 
-    // Initialiser le fichier JSON avec les informations de base
     save_initial_info(gateway, dns_server, dhcp_server, network_address);
 
     printf("\n" GREEN "Network Information:" COLOR_RESET "\n");
@@ -537,7 +583,6 @@ int main() {
     printf("\n");
     perform_ping_tests(gateway);
 
-    // Demander si l'utilisateur veut chercher les VLANs
     printf("\nDo you want to start VLAN search (~60sec)? (y/n): ");
     fflush(stdout);
     if (fgets(response, sizeof(response), stdin) != NULL) {
@@ -546,7 +591,7 @@ int main() {
             char errbuf[PCAP_ERRBUF_SIZE];
             pcap_t *handle;
             struct bpf_program fp;
-            char filter[] = "vlan";
+            char filter[] = "";
             bpf_u_int32 net;
 
             printf(YELLOW "...Starting VLAN search...\n" COLOR_RESET);
@@ -567,7 +612,48 @@ int main() {
                 return(2);
             }
 
-            pcap_loop(handle, -1, packet_handler, (u_char *)handle);
+            time_t start_time = time(NULL);
+            time_t current_time;
+            int result;
+            
+            while (!stop_program) {
+                result = pcap_dispatch(handle, 1, packet_handler, (unsigned char *)handle);
+                
+                current_time = time(NULL);
+                
+                if (vlan_count == 0 && (current_time - start_time >= 60)) {
+                    printf("\n");
+                    printf(RED "No VLAN found in the first 60 seconds. Stopping VLAN search.\n" COLOR_RESET);
+                    printf("\n");
+                    break;
+                }
+                
+                if (vlan_count > 0) {
+                    if (last_vlan_time == 0) {
+                        last_vlan_time = start_time;
+                    }
+                    
+                    if ((current_time - last_vlan_time >= 35)) {
+                        printf("\n");
+                        printf(RED "No new VLAN found in the last 35 seconds. Stopping VLAN search.\n" COLOR_RESET);
+                        printf("\n");
+                        break;
+                    }
+                }
+                
+                if (result == 0) {
+                    continue;
+                }
+                
+                if (result == -1) {
+                    printf(RED "Error reading packets: %s\n" COLOR_RESET, pcap_geterr(handle));
+                    break;
+                }
+                
+                if (result == -2) {
+                    break;
+                }
+            }
 
             pcap_freecode(&fp);
             pcap_close(handle);
@@ -576,14 +662,13 @@ int main() {
         }
     }
 
-    // Demander si l'utilisateur veut chercher les sous-réseaux proches
     printf("\nDo you want to start Nearby Networks search (~240sec)? (y/n): ");
     fflush(stdout);
     if (fgets(response, sizeof(response), stdin) != NULL) {
         response[0] = tolower(response[0]);
         if (response[0] == 'y') {
-            scanNearbyNetworks(my_ip, gateway);
-            finalize_json_file();  // Fermer le fichier JSON une seule fois à la fin
+            scanNearbyNetworks(my_ip, gateway, dns_server);
+            finalize_json_file();
         } else {
             printf(RED "Network search canceled. Stopping program.\n" COLOR_RESET);
             return 0;
