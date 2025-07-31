@@ -229,7 +229,8 @@ char *run_command(const char *command) {
     }
 
     char *output = malloc(1024 * sizeof(char));
-    fread(output, sizeof(char), 1024, fp);
+    size_t bytes_read = fread(output, sizeof(char), 1023, fp);
+    output[bytes_read] = '\0';
     pclose(fp);
 
     return output;
