@@ -79,8 +79,7 @@ python3 mitm.py
 **Better Host Ranking in Scanner:**
 Implement more sophisticated algorithms for host evaluation and ranking to enhance the accuracy and usefulness of the scanner program.
 
-**Creating a better tree:**
-With orderly program storage
+**Organize program tree:** restructure directories for easier navigation
 
 ## Contributing
 
