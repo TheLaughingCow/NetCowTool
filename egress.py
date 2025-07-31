@@ -136,7 +136,7 @@ def test_https(ip, port):
         print(colored("[filtered]", "blue") + f" HTTPS intercepted on port {port}")
         return "filtered"
     except:
-        print(colored("[blocked", "red") + f" HTTPS blocked on port {port}")
+        print(colored("[blocked]", "red") + f" HTTPS blocked on port {port}")
         return "blocked"
 
 def main():
